@@ -92,6 +92,8 @@ rec {
 
           # Minimal environment variables
           (c.set-env "TERM" "dumb")
+          (c.set-env "LANG" "C.UTF-8")
+          (c.set-env "LC_ALL" "C.UTF-8")
         ] ++ projectCombs ++ envVarCombs);
     in
       # Return derivation with /bin/run pointing to the jailed script
