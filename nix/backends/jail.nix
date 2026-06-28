@@ -76,15 +76,18 @@ rec {
 
         workspaceCombs = if runtimeWorkspaceMount then [
           (c.add-runtime ''
-            export HOME="''${WORKSPACE_MOUNT:-${workspaceMount}}";
+            WORKSPACE="''${WORKSPACE_MOUNT:-${workspaceMount}}";
+            RUNTIME_ARGS+=(--setenv HOME "$WORKSPACE")
+            RUNTIME_ARGS+=(--setenv TMPDIR "$WORKSPACE")
             if [ -n "''${WORKSPACE_DIR:-}" ] && [ -d "$WORKSPACE_DIR" ]; then
-              RUNTIME_ARGS+=(--rw-bind "$WORKSPACE_DIR" "$HOME")
+              RUNTIME_ARGS+=(--rw-bind "$WORKSPACE_DIR" "$WORKSPACE")
             else
-              RUNTIME_ARGS+=(--tmpfs "$HOME")
+              RUNTIME_ARGS+=(--tmpfs "$WORKSPACE")
             fi
           '')
         ] else [
           (c.set-env "HOME" workspaceMount)
+          (c.set-env "TMPDIR" workspaceMount)
           (if workspacePath != null then
             c.rw-bind workspacePath workspaceMount
           else
@@ -100,10 +103,6 @@ rec {
         # Add environment packages to PATH
         # Note: add-pkg-deps handles PATH, don't override it manually
         (c.add-pkg-deps [ env ])
-
-        (c.tmpfs "/tmp")
-        (c.set-env "TMPDIR" "/tmp")
-        (c.set-env "HOME" "/tmp")
 
         # No network access by default (security)
         # Network would require: c.network
