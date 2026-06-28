@@ -50,12 +50,14 @@ let
     inherit name env;
     inherit (interpreterConfig) interpreter stdinMode;
     runtimeProjectMount = true;
+    runtimeWorkspaceMount = true;
   };
 
   # Build session wrapper with runtime project mounting
   sessionJailedEnv = jailBackend.mkSessionJailedEnv {
     inherit name env;
     runtimeProjectMount = true;
+    runtimeWorkspaceMount = true;
   };
 
   # metadata.json for the daemon's scanner

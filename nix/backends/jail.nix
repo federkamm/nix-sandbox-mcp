@@ -23,8 +23,11 @@ rec {
     stdinMode ? "arg",  # "arg" = pass as argument, "pipe" = pipe to stdin
     projectPath ? null,
     projectMount ? "/project",
+    workspacePath ? null,
+    workspaceMount ? "/workspace",
     inheritVars ? [],  # Environment variable names to inherit from host
     runtimeProjectMount ? false,  # Use PROJECT_DIR env var at runtime instead of build-time bind
+    runtimeWorkspaceMount ? false,  # Use WORKSPACE_DIR env var at runtime instead of a build-time bind
   }:
     let
       # The runner script that executes inside the jail
@@ -33,14 +36,14 @@ rec {
       runnerScript = if stdinMode == "arg" then
         pkgs.writeShellScriptBin "runner-${name}" ''
           set -euo pipefail
-          cd /workspace
+          cd ${workspaceMount}
           code="$(cat)"
           exec ${interpreter} "$code"
         ''
       else
         pkgs.writeShellScriptBin "runner-${name}" ''
           set -euo pipefail
-          cd /workspace
+          cd ${workspaceMount}
           exec ${interpreter}
         '';
 
@@ -57,71 +60,81 @@ rec {
       # Wrap with jail.nix
       # jail returns a derivation with bin/sandbox-${name} executable
       # Pass the explicit path to the runner script executable
-      jailed = jail "sandbox-${name}" "${runnerScript}/bin/runner-${name}" (c:
-        let
-          # Project mounting combinator
-          # runtimeProjectMount: check PROJECT_DIR env var at runtime (for mkSandbox artifacts)
-          # projectPath: bind at build time (for bundled presets built via fromToml.nix)
-          projectCombs = if runtimeProjectMount then [
-            (c.add-runtime ''
-              if [ -n "''${PROJECT_DIR:-}" ] && [ -d "$PROJECT_DIR" ]; then
-                RUNTIME_ARGS+=(--ro-bind "$PROJECT_DIR" "''${PROJECT_MOUNT:-/project}")
-              fi
-            '')
-          ] else if projectPath != null then [
-            (c.ro-bind projectPath projectMount)
-          ] else [];
+      jailed = jail "sandbox-${name}" "${runnerScript}/bin/runner-${name}" (c: let
+        # Project mounting combinator
+        # runtimeProjectMount: check PROJECT_DIR env var at runtime (for mkSandbox artifacts)
+        # projectPath: bind at build time (for bundled presets built via fromToml.nix)
+        projectCombs = if runtimeProjectMount then [
+          (c.add-runtime ''
+            if [ -n "''${PROJECT_DIR:-}" ] && [ -d "$PROJECT_DIR" ]; then
+              RUNTIME_ARGS+=(--ro-bind "$PROJECT_DIR" "''${PROJECT_MOUNT:-${projectMount}}")
+            fi
+          '')
+        ] else if projectPath != null then [
+          (c.ro-bind projectPath projectMount)
+        ] else [];
 
-          # Environment variable combinators
-          envVarCombs = map (e: c.set-env e.name e.value) inheritedEnvCombs;
-        in [
-          # Minimal base: fake /proc, /dev, coreutils, bash
-          c.base
+        workspaceCombs = if runtimeWorkspaceMount then [
+          (c.add-runtime ''
+            export HOME="''${WORKSPACE_MOUNT:-${workspaceMount}}";
+            export TMPDIR="$HOME"
+            if [ -n "''${WORKSPACE_DIR:-}" ] && [ -d "$WORKSPACE_DIR" ]; then
+              RUNTIME_ARGS+=(--rw-bind "$WORKSPACE_DIR" "$HOME")
+            else
+              RUNTIME_ARGS+=(--tmpfs "$HOME")
+            fi
+          '')
+        ] else [
+          (c.set-env "HOME" workspaceMount)
+          (c.set-env "TMPDIR" workspaceMount)
+          (if workspacePath != null then
+            c.rw-bind workspacePath workspaceMount
+          else
+            c.tmpfs workspaceMount)
+        ];
 
-          # Add environment packages to PATH
-          # Note: add-pkg-deps handles PATH, don't override it manually
-          (c.add-pkg-deps [ env ])
+        # Environment variable combinators
+        envVarCombs = map (e: c.set-env e.name e.value) inheritedEnvCombs;
+      in [
+        # Minimal base: fake /proc, /dev, coreutils, bash
+        c.base
 
-          # Writable workspace (created fresh each run, cleaned up on exit)
-          (c.tmpfs "/workspace")
-          (c.set-env "HOME" "/workspace")
-          (c.set-env "TMPDIR" "/workspace")
+        # Add environment packages to PATH
+        # Note: add-pkg-deps handles PATH, don't override it manually
+        (c.add-pkg-deps [ env ])
 
-          # No network access by default (security)
-          # Network would require: c.network
+        # No network access by default (security)
+        # Network would require: c.network
 
-          # Minimal environment variables
-          (c.set-env "TERM" "dumb")
-          (c.set-env "LANG" "C.UTF-8")
-          (c.set-env "LC_ALL" "C.UTF-8")
-        ] ++ projectCombs ++ envVarCombs);
-    in
-      # Return derivation with /bin/run pointing to the jailed script
-      # ${jailed} is a derivation with bin/sandbox-${name} executable
-      pkgs.runCommand "jailed-${name}" { } ''
-        mkdir -p $out/bin
-        ln -s ${jailed}/bin/sandbox-${name} $out/bin/run
-      '';
+        # Minimal environment variables
+        (c.set-env "TERM" "dumb")
+        (c.set-env "LANG" "C.UTF-8")
+        (c.set-env "LC_ALL" "C.UTF-8")
+      ] ++ projectCombs ++ workspaceCombs ++ envVarCombs);
+  in
+    # Return derivation with /bin/run pointing to the jailed script
+    # ${jailed} is a derivation with bin/sandbox-${name} executable
+    pkgs.runCommand "jailed-${name}" { } ''
+      mkdir -p $out/bin
+      ln -s ${jailed}/bin/sandbox-${name} $out/bin/run
+    '';
 
   # Convenience wrappers for common interpreters
   # All accept optional project mounting params: projectPath, projectMount
-  mkPythonEnv = { name, env, projectPath ? null, projectMount ? "/project" }: mkJailedEnv {
-    inherit name env projectPath projectMount;
+  mkPythonEnv = x: mkJailedEnv ({
     interpreter = "python3 -c";
     stdinMode = "arg";
-  };
+  } // x);
 
-  mkShellEnv = { name, env, projectPath ? null, projectMount ? "/project" }: mkJailedEnv {
-    inherit name env projectPath projectMount;
+  mkShellEnv = x: mkJailedEnv ({
     interpreter = "bash -s";
     stdinMode = "pipe";
-  };
+  } // x);
 
-  mkNodeEnv = { name, env, projectPath ? null, projectMount ? "/project" }: mkJailedEnv {
-    inherit name env projectPath projectMount;
+  mkNodeEnv = x: mkJailedEnv ({
     interpreter = "node -e";
     stdinMode = "arg";
-  };
+  } // x);
 
   # Create a session-enabled jailed wrapper for an environment.
   # Reuses mkJailedEnv with the sandbox agent as the interpreter.
@@ -133,30 +146,22 @@ rec {
   #   env: The environment package (from nix/environments/)
   #   projectPath: Optional path to mount as project directory
   #   projectMount: Mount point for project inside sandbox
-  mkSessionJailedEnv = {
-    name,
-    env,
-    projectPath ? null,
-    projectMount ? "/project",
-    runtimeProjectMount ? false,
-  }:
-    assert agentPkg != null;
-    let
-      # Merge the original env with the agent and python3 (agent runtime)
-      sessionEnv = pkgs.buildEnv {
-        name = "session-env-${name}";
-        paths = [
-          env
-          agentPkg
-          pkgs.python3  # Agent runtime (may overlap with python preset)
-        ];
-        ignoreCollisions = true;
-      };
-    in mkJailedEnv {
-      name = "session-${name}";
-      env = sessionEnv;
-      interpreter = "sandbox-agent";
-      stdinMode = "pipe";
-      inherit projectPath projectMount runtimeProjectMount;
+  mkSessionJailedEnv = x: assert agentPkg != null; let
+    # Merge the original env with the agent and python3 (agent runtime)
+    sessionEnv = pkgs.buildEnv {
+      name = "session-env-${x.name}";
+      paths = [
+        x.env
+        agentPkg
+        pkgs.python3  # Agent runtime (may overlap with python preset)
+      ];
+      ignoreCollisions = true;
     };
+  in mkJailedEnv ({
+    interpreter = "sandbox-agent";
+    stdinMode = "pipe";
+  } // x // {
+    name = "session-${x.name}";
+    env = sessionEnv;
+  });
 }
