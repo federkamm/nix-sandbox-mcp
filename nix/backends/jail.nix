@@ -80,7 +80,7 @@ rec {
             RUNTIME_ARGS+=(--setenv HOME "$WORKSPACE")
             RUNTIME_ARGS+=(--setenv TMPDIR "$WORKSPACE")
             if [ -n "''${WORKSPACE_DIR:-}" ] && [ -d "$WORKSPACE_DIR" ]; then
-              RUNTIME_ARGS+=(--rw-bind "$WORKSPACE_DIR" "$WORKSPACE")
+              RUNTIME_ARGS+=(--bind "$WORKSPACE_DIR" "$WORKSPACE")
             else
               RUNTIME_ARGS+=(--tmpfs "$WORKSPACE")
             fi
